@@ -1,0 +1,249 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #100e0c;
+  --color-surface: #1c1814;
+  --color-elevated: #2a241e;
+  --color-fg: #f6f0e8;
+  --color-muted: #b3a89c;
+  --color-subtle: #8a8074;
+  --color-border: color-mix(in oklab, var(--color-fg) 12%, transparent);
+  --color-accent: #ff8a3d;
+  --color-accent-fg: #1a100a;
+  --color-ring: color-mix(in oklab, var(--color-accent) 55%, transparent);
+
+  --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Instrument Serif", ui-serif, Georgia, serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 24px;
+  --radius-3xl: 32px;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.5rem;
+  --text-2xl: 1.875rem;
+  --text-3xl: 2.5rem;
+
+  --tracking-caps: 0.16em;
+  --tracking-display: -0.03em;
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  html,
+  body,
+  #app {
+    height: 100%;
+    background: var(--color-bg);
+    color: var(--color-fg);
+  }
+
+  body {
+    font-family: var(--font-sans);
+    line-height: 1.5;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+}
+
+.cinder-root {
+  position: relative;
+  height: 100dvh;
+  width: 100%;
+  overflow: hidden;
+  background: #100e0c;
+  color: var(--color-fg);
+  touch-action: none;
+  user-select: none;
+}
+
+.cinder-hud {
+  padding-top: max(1rem, env(safe-area-inset-top));
+  padding-right: max(1rem, env(safe-area-inset-right));
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  padding-left: max(1rem, env(safe-area-inset-left));
+}
+
+.cinder-pace {
+  background: linear-gradient(90deg, #c9844e, #ff8a3d 70%, #ffe2c4);
+  transition: width 200ms linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cinder-pace {
+    transition: none;
+  }
+}
+
+.helio-panel {
+  background: color-mix(in oklab, var(--color-surface) 92%, transparent);
+  color: var(--color-fg);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-fg) 4%, transparent);
+  border-radius: var(--radius-2xl);
+}
+
+.helio-sheet {
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+@media (min-width: 768px) {
+  .helio-sheet {
+    max-height: 70vh;
+  }
+}
+
+.helio-label {
+  font-family: var(--font-sans);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--color-fg);
+  background: color-mix(in oklab, var(--color-bg) 78%, transparent);
+  border: 1px solid var(--color-border);
+  padding: 0.3rem 0.55rem;
+  border-radius: 999px;
+  white-space: nowrap;
+  line-height: 1;
+  will-change: transform, opacity;
+  transition: opacity 150ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.helio-label.is-active {
+  border-color: color-mix(in oklab, var(--color-fg) 28%, transparent);
+  background: color-mix(in oklab, var(--color-elevated) 88%, transparent);
+}
+
+.helio-chips {
+  scrollbar-width: none;
+}
+
+.helio-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.helio-hud {
+  padding-top: max(1rem, env(safe-area-inset-top));
+  padding-right: max(1rem, env(safe-area-inset-right));
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  padding-left: max(1rem, env(safe-area-inset-left));
+}
+
+.panel-enter {
+  animation: panel-in 250ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel-enter {
+    animation: none;
+  }
+}
+
+.icon-swap {
+  position: relative;
+  display: inline-flex;
+  width: 1rem;
+  height: 1rem;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon-swap > svg {
+  position: absolute;
+  width: 1rem;
+  height: 1rem;
+  transition:
+    opacity 200ms cubic-bezier(0.23, 1, 0.32, 1),
+    transform 200ms cubic-bezier(0.23, 1, 0.32, 1),
+    filter 200ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.icon-swap > .is-hidden {
+  opacity: 0;
+  transform: scale(0.25);
+  filter: blur(4px);
+}
+
+.icon-swap > .is-shown {
+  opacity: 1;
+  transform: scale(1);
+  filter: blur(0);
+}
+
+.helio-kbd {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+  color: var(--color-fg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 0.15rem 0.4rem;
+  background: var(--color-elevated);
+}
+
+.helio-pill {
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-muted);
+  font-weight: 500;
+  transition:
+    background-color 150ms cubic-bezier(0.22, 1, 0.36, 1),
+    color 150ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 150ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.helio-pill:hover {
+  color: var(--color-fg);
+  background: var(--color-elevated);
+}
+
+.helio-pill.is-active {
+  color: var(--color-accent-fg);
+  background: var(--color-accent);
+  border-color: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .icon-swap > svg {
+    transition: none;
+  }
+}
