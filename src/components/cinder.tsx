@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Volume2, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { CinderGame, loadBest, MUTE_KEY, pace01, type Phase, type RunStats } from "@/lib/cinder-game";
+import { CITIES, CITY_KEY, loadCity, type CityId } from "@/lib/cinder-cities";
+import { CinderGame, loadBest, MUTE_KEY, type Phase, type RunStats } from "@/lib/cinder-game";
+import { cn } from "@/lib/utils";
 
 type Card = RunStats & { show: boolean };
 
@@ -12,9 +14,11 @@ export function Cinder() {
   const comboRef = useRef<HTMLSpanElement>(null);
   const paceRef = useRef<HTMLSpanElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
+  const roadRef = useRef<HTMLParagraphElement>(null);
   const [phase, setPhase] = useState<Phase>("ready");
   const [best, setBest] = useState(0);
   const [muted, setMuted] = useState(false);
+  const [city, setCity] = useState<CityId>("default");
   const [card, setCard] = useState<Card>({
     score: 0,
     best: 0,
@@ -22,16 +26,20 @@ export function Cinder() {
     fresh: false,
     embers: 0,
     meters: 0,
+    road: "The line",
+    city: "Default",
     show: false,
   });
 
   useEffect(() => {
     const storedBest = loadBest(localStorage);
     const storedMute = localStorage.getItem(MUTE_KEY) === "1";
+    const storedCity = loadCity(localStorage);
     setBest(storedBest);
     setMuted(storedMute);
+    setCity(storedCity);
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const game = new CinderGame({ best: storedBest, muted: storedMute, reduced });
+    const game = new CinderGame({ best: storedBest, muted: storedMute, reduced, city: storedCity });
     gameRef.current = game;
     game.onPhase = (next, stats) => {
       setPhase(next);
@@ -71,11 +79,15 @@ export function Cinder() {
       if (comboRef.current) {
         comboRef.current.textContent = game.combo > 1 ? `×${game.combo}` : "×1";
       }
-      if (paceRef.current) {
-        const pace = pace01(game.distance);
-        paceRef.current.textContent = pace < 0.34 ? "Warm" : pace < 0.7 ? "Hot" : "White";
+      if (paceRef.current) paceRef.current.textContent = game.paceLabel();
+      if (roadRef.current) {
+        const note = game.roadNote();
+        roadRef.current.textContent = note ? `${game.roadName()} — ${note}` : game.roadName();
       }
-      if (barRef.current) barRef.current.style.width = `${Math.round(pace01(game.distance) * 100)}%`;
+      if (barRef.current) {
+        const pace = Math.min(1, game.distance / 7200);
+        barRef.current.style.width = `${Math.round(pace * 100)}%`;
+      }
       frame = window.requestAnimationFrame(loop);
     };
     frame = window.requestAnimationFrame(loop);
@@ -85,7 +97,8 @@ export function Cinder() {
       if (target instanceof HTMLButtonElement) return;
       const jump = event.code === "Space" || event.code === "ArrowUp" || event.code === "KeyW";
       const slide = event.code === "ArrowDown" || event.code === "KeyS";
-      if (!jump && !slide) return;
+      const pause = event.code === "Escape" || event.code === "KeyP";
+      if (!jump && !slide && !pause) return;
       if (event.type === "keydown" && event.repeat) return;
       event.preventDefault();
       game.key(event.code, event.type === "keydown");
@@ -104,6 +117,16 @@ export function Cinder() {
 
   const play = () => gameRef.current?.start();
 
+  const pickCity = (id: CityId) => {
+    setCity(id);
+    gameRef.current?.setCity(id);
+    try {
+      localStorage.setItem(CITY_KEY, id);
+    } catch {
+      /* ignore */
+    }
+  };
+
   const toggleMute = () => {
     const next = !muted;
     setMuted(next);
@@ -114,6 +137,8 @@ export function Cinder() {
       /* ignore */
     }
   };
+
+  const selected = CITIES.find((item) => item.id === city) ?? CITIES[0];
 
   return (
     <main className="cinder-root">
@@ -162,7 +187,7 @@ export function Cinder() {
           </div>
         </div>
 
-        <div className="mt-3 w-36">
+        <div className="mt-3 max-w-xs">
           <div className="mb-1 flex items-center justify-between text-xs tracking-caps text-muted uppercase">
             <span>Pace</span>
             <span ref={paceRef}>Warm</span>
@@ -170,6 +195,9 @@ export function Cinder() {
           <div className="h-1.5 overflow-hidden rounded-full bg-elevated">
             <div ref={barRef} className="cinder-pace h-full w-[4%] rounded-full" />
           </div>
+          <p ref={roadRef} className="mt-2 max-w-xs text-xs text-subtle">
+            The line
+          </p>
         </div>
 
         <div className="mt-auto flex items-end justify-between gap-3">
@@ -187,13 +215,33 @@ export function Cinder() {
             if (event.target === event.currentTarget) play();
           }}
         >
-          <section className="helio-panel panel-enter w-full max-w-md p-6 text-center">
+          <section className="helio-panel panel-enter max-h-[90dvh] w-full max-w-md overflow-y-auto p-6 text-center">
             <p className="text-xs font-medium tracking-caps text-muted uppercase">Endless line</p>
             <h1 className="font-display text-5xl italic leading-none tracking-display">Cinder</h1>
-            <p className="mx-auto mt-3 max-w-sm text-sm text-muted">
-              Jump the slag, slide the gantries, and keep a streak while the line runs hotter.
+            <p className="mx-auto mt-3 max-w-sm text-sm text-muted">{selected.blurb}</p>
+            <div className="cinder-cities mt-4" role="listbox" aria-label="City">
+              {CITIES.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="option"
+                  aria-selected={item.id === city}
+                  className={cn(
+                    "helio-pill h-11 shrink-0 px-3 text-xs tracking-caps uppercase",
+                    item.id === city && "is-active",
+                  )}
+                  onClick={() => pickCity(item.id)}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-3 text-xs text-subtle">
+              {city === "default"
+                ? "Jump slag. Slide gantries."
+                : "Jump potholes and oncoming cars. Slide the gantries. Streets change as you go."}
             </p>
-            <Button className="mt-6 w-full" variant="primary" onClick={play}>
+            <Button className="mt-5 w-full" variant="primary" onClick={play}>
               Run
             </Button>
             <p className="mt-3 text-xs text-subtle tabular-nums">Best {best}</p>
@@ -210,11 +258,12 @@ export function Cinder() {
         >
           <section className="helio-panel panel-enter w-full max-w-md p-6 text-center" aria-label="Run over">
             <p className="text-xs font-medium tracking-caps text-muted uppercase">
-              {card.fresh ? "New best" : "The line went cold"}
+              {card.fresh ? "New best" : card.city === "Default" ? "The line went cold" : card.city}
             </p>
             <h2 className="font-display text-5xl italic leading-none tracking-display">
               {card.score.toLocaleString("en-US")}
             </h2>
+            <p className="mt-2 text-sm text-muted">{card.road}</p>
             <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
               <div className="rounded-xl bg-elevated px-3 py-2">
                 <dt className="text-xs tracking-caps text-subtle uppercase">Best</dt>

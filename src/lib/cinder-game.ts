@@ -1,3 +1,5 @@
+import { cityById, drawLandmark, type CityId, type Spot } from "@/lib/cinder-cities";
+
 export const BEST_KEY = "cinder-best";
 export const MUTE_KEY = "cinder-muted";
 
@@ -12,7 +14,7 @@ const COYOTE = 0.09;
 const JUMP_BUFFER = 0.1;
 
 export type Phase = "ready" | "run" | "dead";
-export type Kind = "block" | "beam" | "vent";
+export type Kind = "block" | "beam" | "vent" | "pot" | "car" | "bus";
 
 export type RunStats = {
   score: number;
@@ -21,6 +23,8 @@ export type RunStats = {
   fresh: boolean;
   embers: number;
   meters: number;
+  road: string;
+  city: string;
 };
 
 export function metersFor(distance: number): number {
@@ -36,7 +40,12 @@ type Obstacle = {
   near: boolean;
   bob: number;
   phase: number;
+  vx: number;
+  honked: boolean;
+  tag: string;
 };
+
+type Mark = Spot & { x: number; seen: boolean };
 
 type Pickup = {
   kind: "ember" | "shield";
@@ -187,6 +196,7 @@ export class CinderGame {
   embers = 0;
   shield = 0;
   paused = false;
+  cityId: CityId = "default";
   muted = false;
   reduced = false;
 
@@ -213,6 +223,8 @@ export class CinderGame {
   private lastClear = -10;
   private comboLeft = 0;
   private obstacles: Obstacle[] = [];
+  private marks: Mark[] = [];
+  private nextMark = 1100;
   private pickups: Pickup[] = [];
   private particles: Particle[] = [];
   private popups: Popup[] = [];
@@ -228,10 +240,11 @@ export class CinderGame {
   onPhase: ((phase: Phase, stats: RunStats) => void) | null = null;
   onPause: ((paused: boolean) => void) | null = null;
 
-  constructor(opts?: { best?: number; muted?: boolean; reduced?: boolean }) {
+  constructor(opts?: { best?: number; muted?: boolean; reduced?: boolean; city?: CityId }) {
     this.best = opts?.best ?? 0;
     this.muted = opts?.muted ?? false;
     this.reduced = opts?.reduced ?? false;
+    this.cityId = opts?.city ?? "default";
     for (let i = 0; i < 28; i++) this.embersFx.push(this.makeEmber(true));
   }
 
@@ -250,7 +263,35 @@ export class CinderGame {
       fresh: this.isFresh,
       embers: this.embers,
       meters: metersFor(this.distance),
+      road: this.roadName(),
+      city: cityById(this.cityId).label,
     };
+  }
+
+  roadName(): string {
+    const city = cityById(this.cityId);
+    if (city.roads.length === 0) return "The line";
+    const index = Math.floor(this.distance / 1800) % city.roads.length;
+    return city.roads[index].name;
+  }
+
+  roadNote(): string {
+    const city = cityById(this.cityId);
+    if (city.roads.length === 0) return "";
+    const index = Math.floor(this.distance / 1800) % city.roads.length;
+    return city.roads[index].note;
+  }
+
+  paceLabel(): string {
+    const city = cityById(this.cityId);
+    const pace = pace01(this.distance);
+    if (pace < 0.34) return city.pace[0];
+    if (pace < 0.7) return city.pace[1];
+    return city.pace[2];
+  }
+
+  setCity(id: CityId): void {
+    this.cityId = cityById(id).id;
   }
 
   start(): void {
@@ -382,16 +423,19 @@ export class CinderGame {
     }
 
     const speed = speedFor(this.distance);
-    const slices = Math.max(1, Math.ceil((speed * t) / 12));
+    const closing = this.cityId === "default" ? speed : speed + 180;
+    const slices = Math.max(1, Math.ceil((closing * t) / 12));
     const sub = t / slices;
     for (let i = 0; i < slices; i++) {
       this.distance += speed * sub;
       this.score += (speed / 430) * 14 * sub;
+      this.advanceTraffic(sub);
       this.physics(sub);
       this.collide();
       this.collect();
       if (this.phase !== "run") break;
     }
+    this.passMarks();
     this.spawn();
     this.cull();
   }
@@ -403,9 +447,10 @@ export class CinderGame {
     ctx.clearRect(0, 0, cssW, cssH);
     ctx.setTransform(this.dpr * this.scale, 0, 0, this.dpr * this.scale, shakeX, shakeY);
 
-    this.tone = toneFor(this.phase === "ready" ? 0 : pace01(this.distance));
+    this.tone = this.cityId === "default" ? toneFor(this.phase === "ready" ? 0 : pace01(this.distance)) : this.cityTone();
     this.drawSky(ctx);
     this.drawRidges(ctx);
+    this.drawLandmarks(ctx);
     this.drawGround(ctx);
     for (const obs of this.obstacles) this.drawObstacle(ctx, obs);
     this.drawPickups(ctx);
@@ -451,6 +496,8 @@ export class CinderGame {
     this.shieldPulse = 0;
     this.runTime = 0;
     this.obstacles = [];
+    this.marks = [];
+    this.nextMark = 720;
     this.pickups = [];
     this.particles = [];
     this.popups = [];
@@ -458,15 +505,20 @@ export class CinderGame {
   }
 
   private seedStart(): void {
+    const city = this.cityId !== "default";
+    const kinds: Array<Kind | undefined> = city
+      ? ["block", "pot", "car", "beam"]
+      : ["block", undefined, undefined, undefined];
     let x = 980;
     for (let i = 0; i < 4; i++) {
-      const obs = this.makeObstacle(x, i === 0 ? "block" : undefined);
+      const obs = this.makeObstacle(x, kinds[i]);
       this.obstacles.push(obs);
-      const next = x + gapFor(i * 400, Math.random());
+      const next = x + this.gapAfter(obs.kind, i * 400);
       this.seedPickup(obs.x + obs.w + 28, next - 28);
       x = next;
     }
     this.nextX = x;
+    this.seedMarks(x);
   }
 
   private playerX(): number {
@@ -483,25 +535,86 @@ export class CinderGame {
       const kind = this.pickKind(d, last);
       const obs = this.makeObstacle(this.nextX, kind);
       this.obstacles.push(obs);
-      const gap = gapFor(this.distance, Math.random());
+      const gap = this.gapAfter(kind, this.distance);
       this.seedPickup(obs.x + obs.w + 28, obs.x + gap - 28);
       this.nextX = obs.x + gap;
+    }
+    this.seedMarks(ahead);
+  }
+
+  private gapAfter(kind: Kind, distance: number): number {
+    let gap = gapFor(distance, Math.random());
+    if (kind === "car" || kind === "bus") {
+      const speed = Math.max(280, speedFor(distance));
+      const extra = kind === "bus" ? 120 : 170;
+      gap *= (speed + extra) / speed;
+    }
+    return gap;
+  }
+
+  private advanceTraffic(dt: number): void {
+    for (const obs of this.obstacles) {
+      if (obs.vx !== 0) obs.x += obs.vx * dt;
+    }
+  }
+
+  private passMarks(): void {
+    const px = this.distance + this.playerX();
+    for (const mark of this.marks) {
+      if (mark.seen || mark.x > px) continue;
+      mark.seen = true;
+      this.score += mark.famous ? 40 : 18;
+      this.popups.push({
+        x: this.playerX() + 30,
+        y: GROUND - 150,
+        text: mark.name,
+        life: 1.15,
+      });
+    }
+  }
+
+  private seedMarks(ahead: number): void {
+    const city = cityById(this.cityId);
+    if (city.spots.length === 0) return;
+    let guard = 0;
+    while (this.nextMark < ahead && guard < 4) {
+      guard += 1;
+      const spot = city.spots[Math.floor(Math.random() * city.spots.length)];
+      this.marks.push({ ...spot, x: this.nextMark, seen: false });
+      this.nextMark += rand(980, 1560);
     }
   }
 
   private pickKind(d: number, previous?: Kind): Kind {
+    const city = cityById(this.cityId);
     const r = Math.random();
-    if (previous === "beam") return r < 0.62 ? "block" : "vent";
-    if (previous === "vent") return r < 0.45 ? "beam" : "block";
-    if (previous === "block") return r < 0.5 ? "beam" : r < 0.78 ? "block" : "vent";
-    if (r < 0.48 - d * 0.1) return "block";
-    if (r < 0.78) return "beam";
-    return d > 0.15 ? "vent" : "block";
+    if (city.id === "default") {
+      if (previous === "beam") return r < 0.62 ? "block" : "vent";
+      if (previous === "vent") return r < 0.45 ? "beam" : "block";
+      if (previous === "block") return r < 0.5 ? "beam" : r < 0.78 ? "block" : "vent";
+      if (r < 0.48 - d * 0.1) return "block";
+      if (r < 0.78) return "beam";
+      return d > 0.15 ? "vent" : "block";
+    }
+    if (previous === "beam") return r < 0.55 ? "pot" : "block";
+    if (previous === "car" || previous === "bus") return r < 0.4 ? "beam" : r < 0.7 ? "pot" : "block";
+    if (previous === "pot") return r < 0.45 ? "beam" : r < 0.7 ? "car" : "block";
+    const pot = 0.16 + city.pot + d * 0.08;
+    const car = pot + 0.14 + city.traffic;
+    const bus = car + 0.1;
+    const beam = bus + 0.16;
+    if (r < pot) return "pot";
+    if (r < car) return "car";
+    if (r < bus) return "bus";
+    if (r < beam) return "beam";
+    return "block";
   }
 
   private makeObstacle(x: number, kind?: Kind): Obstacle {
     const d = pace01(Math.max(0, x - 800));
     const k = kind ?? this.pickKind(d);
+    const city = cityById(this.cityId);
+    const tag = city.plate ? `${city.plate} ${Math.floor(rand(1, 9))}${Math.floor(rand(10, 99))}` : "";
     if (k === "beam") {
       const bob = d > 0.4 && Math.random() < 0.62 ? rand(10, 16) : 0;
       return {
@@ -513,6 +626,9 @@ export class CinderGame {
         near: false,
         bob,
         phase: rand(0, Math.PI * 2),
+        vx: 0,
+        honked: false,
+        tag: "",
       };
     }
     if (k === "vent") {
@@ -525,6 +641,54 @@ export class CinderGame {
         near: false,
         bob: 0,
         phase: 0,
+        vx: 0,
+        honked: false,
+        tag: "",
+      };
+    }
+    if (k === "pot") {
+      return {
+        kind: k,
+        x,
+        w: rand(78, 128),
+        h: 20,
+        cleared: false,
+        near: false,
+        bob: 0,
+        phase: 0,
+        vx: 0,
+        honked: false,
+        tag: "",
+      };
+    }
+    if (k === "car") {
+      return {
+        kind: k,
+        x,
+        w: rand(78, 96),
+        h: 36,
+        cleared: false,
+        near: false,
+        bob: 0,
+        phase: 0,
+        vx: -170,
+        honked: false,
+        tag,
+      };
+    }
+    if (k === "bus") {
+      return {
+        kind: k,
+        x,
+        w: rand(118, 146),
+        h: 58,
+        cleared: false,
+        near: false,
+        bob: 0,
+        phase: 0,
+        vx: -120,
+        honked: false,
+        tag,
       };
     }
     const h = clamp(42 + Math.random() * 16 + d * 12, 42, 68);
@@ -537,6 +701,9 @@ export class CinderGame {
       near: false,
       bob: 0,
       phase: 0,
+      vx: 0,
+      honked: false,
+      tag: "",
     };
   }
 
@@ -631,7 +798,7 @@ export class CinderGame {
       const bottom = GROUND - 64 + bob;
       return { x, y: bottom - obs.h, w: obs.w, h: obs.h };
     }
-    if (obs.kind === "vent") {
+    if (obs.kind === "vent" || obs.kind === "pot") {
       return { x, y: GROUND - obs.h, w: obs.w, h: obs.h };
     }
     return { x, y: GROUND - obs.h, w: obs.w, h: obs.h };
@@ -773,6 +940,42 @@ export class CinderGame {
     const limit = this.distance - 200;
     this.obstacles = this.obstacles.filter((obs) => obs.x + obs.w > limit);
     this.pickups = this.pickups.filter((p) => !p.taken && p.x > limit);
+    this.marks = this.marks.filter((mark) => mark.x > this.distance - 400);
+  }
+
+  private cityTone(): Tone {
+    const city = cityById(this.cityId);
+    const pace = pace01(this.distance);
+    const base = toneFor(pace);
+    return {
+      ...base,
+      skyTop: city.sky[0],
+      skyMid: city.sky[1],
+      skyLow: city.sky[2],
+      ground: city.road,
+      rail: city.lane,
+      tick: city.dash,
+      edge: city.accent,
+      lamp: city.accent,
+    };
+  }
+
+  private drawLandmarks(ctx: CanvasRenderingContext2D): void {
+    const city = cityById(this.cityId);
+    if (city.spots.length === 0) return;
+    ctx.textAlign = "center";
+    ctx.font = "600 13px Outfit, sans-serif";
+    for (const mark of this.marks) {
+      const x = mark.x - this.distance;
+      if (x < -160 || x > this.viewW + 160) continue;
+      drawLandmark(ctx, mark.shape, x, GROUND, "#d9cbb8", city.accent);
+      ctx.fillStyle = mark.famous ? "#f6f0e8" : "#c4b8aa";
+      ctx.fillText(mark.name, x, GROUND - 132);
+      ctx.font = "500 10px Outfit, sans-serif";
+      ctx.fillStyle = "#8a8074";
+      ctx.fillText(mark.famous ? "landmark" : "street", x, GROUND - 116);
+      ctx.font = "600 13px Outfit, sans-serif";
+    }
   }
 
   private drawSky(ctx: CanvasRenderingContext2D): void {
@@ -824,28 +1027,48 @@ export class CinderGame {
   }
 
   private drawGround(ctx: CanvasRenderingContext2D): void {
+    const city = cityById(this.cityId);
     ctx.fillStyle = this.tone.ground;
     ctx.fillRect(0, GROUND, this.viewW, this.viewH - GROUND);
     ctx.fillStyle = this.tone.rail;
     ctx.fillRect(0, GROUND, this.viewW, 3);
+    if (city.id === "default") {
+      ctx.fillStyle = this.tone.tick;
+      const step = 48;
+      const shift = this.distance % step;
+      for (let x = -shift; x < this.viewW; x += step) {
+        ctx.fillRect(x, GROUND + 16, 18, 2);
+      }
+      return;
+    }
     ctx.fillStyle = this.tone.tick;
-    const step = 48;
-    const shift = this.distance % step;
-    for (let x = -shift; x < this.viewW; x += step) {
-      ctx.fillRect(x, GROUND + 16, 18, 2);
+    const dash = 36;
+    const gap = 28;
+    const span = dash + gap;
+    const shift = this.distance % span;
+    for (let x = -shift; x < this.viewW; x += span) {
+      ctx.fillRect(x, GROUND + 28, dash, 4);
+    }
+    ctx.fillStyle = "rgba(246, 240, 232, 0.55)";
+    ctx.font = "600 18px Outfit, sans-serif";
+    ctx.textAlign = "left";
+    const label = this.roadName().toUpperCase();
+    const tile = 520;
+    const off = this.distance % tile;
+    for (let x = -off; x < this.viewW; x += tile) {
+      ctx.fillText(label, x + 24, GROUND + 64);
     }
   }
 
   private drawObstacle(ctx: CanvasRenderingContext2D, obs: Obstacle): void {
     const r = this.obsRect(obs);
     if (r.x > this.viewW + 40 || r.x + r.w < -40) return;
-    if (obs.kind === "vent") {
-      ctx.fillStyle = "#0c0a09";
-      ctx.fillRect(r.x, GROUND - 8, r.w, 22);
-      ctx.fillStyle = this.tone.edge;
-      ctx.globalAlpha = 0.85;
-      ctx.fillRect(r.x + 6, GROUND - 4, r.w - 12, 3);
-      ctx.globalAlpha = 1;
+    if (obs.kind === "vent" || obs.kind === "pot") {
+      this.drawPot(ctx, r, obs.kind === "pot");
+      return;
+    }
+    if (obs.kind === "car" || obs.kind === "bus") {
+      this.drawVehicle(ctx, obs, r);
       return;
     }
     if (obs.kind === "beam") {
@@ -855,6 +1078,16 @@ export class CinderGame {
       ctx.fillStyle = this.tone.beam;
       roundRect(ctx, r.x, r.y, r.w, r.h, 4);
       ctx.fill();
+      if (this.cityId !== "default") {
+        ctx.fillStyle = "#1a1612";
+        ctx.fillRect(r.x + 8, r.y + 4, r.w - 16, r.h - 8);
+        ctx.fillStyle = this.tone.edge;
+        ctx.font = "600 11px Outfit, sans-serif";
+        ctx.textAlign = "center";
+        const sign = this.roadName();
+        ctx.fillText(sign.length > 16 ? sign.slice(0, 15) : sign, r.x + r.w * 0.5, r.y + 16);
+        return;
+      }
       ctx.fillStyle = this.tone.edge;
       for (let x = r.x + 8; x < r.x + r.w - 8; x += 16) {
         ctx.fillRect(x, r.y + 6, 8, r.h - 12);
@@ -872,6 +1105,61 @@ export class CinderGame {
     ctx.moveTo(r.x + 10, r.y + r.h - 8);
     ctx.lineTo(r.x + r.w * 0.55, r.y + 10);
     ctx.stroke();
+  }
+
+  private drawPot(ctx: CanvasRenderingContext2D, r: { x: number; y: number; w: number; h: number }, crater: boolean): void {
+    ctx.fillStyle = "#0c0a09";
+    ctx.beginPath();
+    ctx.ellipse(r.x + r.w * 0.5, GROUND + 2, r.w * 0.48, crater ? 14 : 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = this.tone.edge;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    if (!crater) {
+      ctx.fillStyle = this.tone.edge;
+      ctx.globalAlpha = 0.85;
+      ctx.fillRect(r.x + 8, GROUND - 2, r.w - 16, 3);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  private drawVehicle(
+    ctx: CanvasRenderingContext2D,
+    obs: Obstacle,
+    r: { x: number; y: number; w: number; h: number },
+  ): void {
+    const city = cityById(this.cityId);
+    if (!obs.honked && r.x < this.viewW - 20) {
+      obs.honked = true;
+      this.blip(obs.kind === "bus" ? 140 : 220, 0.09, "square", 0.04);
+    }
+    const y = GROUND - r.h;
+    ctx.fillStyle = obs.kind === "bus" ? city.bus : city.car;
+    roundRect(ctx, r.x, y, r.w, r.h - 8, 6);
+    ctx.fill();
+    ctx.fillStyle = city.roof;
+    if (obs.kind === "bus") {
+      ctx.fillStyle = "rgba(186, 220, 230, 0.85)";
+      for (let i = 0; i < 3; i++) ctx.fillRect(r.x + 12 + i * (r.w / 3.4), y + 8, r.w / 4.2, 16);
+    } else {
+      roundRect(ctx, r.x + r.w * 0.28, y + 4, r.w * 0.4, 12, 3);
+      ctx.fill();
+    }
+    ctx.fillStyle = "#f4f0c8";
+    ctx.beginPath();
+    ctx.arc(r.x + 6, y + r.h * 0.45, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#1a1612";
+    ctx.beginPath();
+    ctx.arc(r.x + 16, GROUND - 4, 6, 0, Math.PI * 2);
+    ctx.arc(r.x + r.w - 16, GROUND - 4, 6, 0, Math.PI * 2);
+    ctx.fill();
+    if (obs.tag) {
+      ctx.fillStyle = "#f6f0e8";
+      ctx.font = "600 9px Outfit, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(obs.tag, r.x + r.w * 0.5, y + r.h - 12);
+    }
   }
 
   private drawPlayer(ctx: CanvasRenderingContext2D): void {

@@ -89,6 +89,20 @@
   padding-left: max(1rem, env(safe-area-inset-left));
 }
 
+.cinder-cities {
+  display: flex;
+  max-width: 100%;
+  gap: 0.5rem;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  touch-action: pan-x;
+}
+
+.cinder-cities::-webkit-scrollbar {
+  display: none;
+}
+
 .cinder-pace {
   background: linear-gradient(90deg, #c9844e, #ff8a3d 70%, #ffe2c4);
   transition: width 200ms linear;
